@@ -1,0 +1,67 @@
+name: Build unsigned IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      project:
+        description: "Path to .xcodeproj (leave blank to auto-detect)"
+        required: false
+        default: ""
+      scheme:
+        description: "Scheme name (leave blank to auto-detect)"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: Integration
+          submodules: recursive
+
+      - name: Show environment
+        run: |
+          xcodebuild -version
+          ls -la
+          find . -maxdepth 2 \( -name "*.xcodeproj" -o -name "*.xcworkspace" \)
+
+      - name: Build and package IPA
+        run: |
+          set -eo pipefail
+          PROJECT="${{ inputs.project }}"
+          SCHEME="${{ inputs.scheme }}"
+
+          if [ -z "$PROJECT" ]; then
+            PROJECT=$(find . -maxdepth 2 -name "*.xcodeproj" \
+              -not -path "./libs/*" -not -path "./X1Kit/*" \
+              -not -path "./moonlight-common/*" | head -n1)
+          fi
+          echo "Project: $PROJECT"
+          xcodebuild -list -project "$PROJECT"
+
+          if [ -z "$SCHEME" ]; then
+            SCHEME=$(xcodebuild -list -json -project "$PROJECT" \
+              | python3 -c "import sys,json; print(json.load(sys.stdin)['project']['schemes'][0])")
+          fi
+          echo "Scheme: $SCHEME"
+
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/app.xcarchive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+
+          APP=$(find build/app.xcarchive/Products/Applications -maxdepth 1 -name "*.app" | head -n1)
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry VoidLink-unsigned.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VoidLink-unsigned-ipa
+          path: VoidLink-unsigned.ipa
